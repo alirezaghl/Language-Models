@@ -3,8 +3,9 @@ import torch
 import torch.nn as nn
 import math
 
+
 class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model, n_head, max_len):
+    def __init__(self, d_model, n_head, context_length):
         super().__init__()
         self.d_model = d_model
         self.n_head = n_head
@@ -12,28 +13,34 @@ class CausalSelfAttention(nn.Module):
 
         self.attn_dropout = nn.Dropout(0.1)
         self.proj_dropout = nn.Dropout(0.1)
-        self.register_buffer("mask", torch.tril(torch.ones(max_len, max_len)).unsqueeze(0).unsqueeze(0))
+        # Masking procedure adapted from https://github.com/rasbt/LLMs-from-scratch/blob/main/ch03/01_main-chapter-code/ch03.ipynb
+        self.register_buffer("mask", torch.triu(torch.ones(context_length, context_length), diagonal=1))
 
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
-        self.w_o = nn.Linear(d_model, d_model)
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model, bias=False)
 
-    def forward(self, x, q, k, v):
-        B, S, E = q.size()
-        q = self.w_q(q).view(B, S, self.n_head, self.d_k).transpose(1, 2)
-        k = self.w_k(k).view(B, S, self.n_head, self.d_k).transpose(1, 2)
-        v = self.w_v(v).view(B, S, self.n_head, self.d_k).transpose(1, 2)
+    def forward(self, x):
+        batch_size, context_length, d_model = x.size()
+        query = self.w_q(x)
+        query = query.view(batch_size, context_length, self.n_head, self.d_k).transpose(1,2) # ---> (batch_size, n_head, context_length, d_k)
+        key = self.w_k(x)
+        key = key.view(batch_size, context_length, self.n_head, self.d_k).transpose(1,2) # ---> (batch_size, n_head, context_length, d_k)
+        value = self.w_v(x)
+        value = value.view(batch_size, context_length, self.n_head, self.d_k).transpose(1,2) # ---> (batch_size, n_head, context_length, d_k)
 
-        attn = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        attn = attn.masked_fill(self.mask[:,:,:S,:S] == 0, float('-inf'))
-        attn = torch.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
 
-        y = (attn @ v).transpose(1, 2).contiguous().view(B, S, E)
-        y = self.proj_dropout(self.w_o(y))
+        attention = (query @ key.transpose(-2, -1)) * (1.0 / math.sqrt(key.size(-1))) # -----> (batch_size, n_head, context_length, context_length)
+        mask_bool = self.mask.bool()[:context_length, :context_length]
+        attention.masked_fill_(mask_bool, -torch.inf)
+        attention = torch.softmax(attention, dim=-1)
+        attention = self.attn_dropout(attention)
 
-        return y
+        context = (attention @ value).transpose(1, 2).contiguous().view(batch_size, context_length, d_model)
+        context = self.proj_dropout(self.w_o(context))
+
+        return context
 
 class Block(nn.Module):
     def __init__(self, d_model, n_head, context_length):
@@ -49,7 +56,7 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        x = x + self.attention(self.ln1(x), x, x, x)
+        x = x + self.attention(self.ln1(x))
         x = x + self.ff(self.ln2(x))
         return x
 
@@ -67,17 +74,20 @@ class GPT(nn.Module):
         self.blocks = nn.ModuleList([Block(d_model, n_head, context_length) for _ in range(num_blocks)])
         self.ln = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
+        self.dropout = nn.Dropout(0.1)
 
-        self.lm_head.weight = self.te.weight  # Tie weights to reducing number of trainable parameters
+        #self.lm_head.weight = self.te.weight  # Tie weights to reduce the number of trainable parameters (optional for reproducing the 124m model,
+                                                #otherwise it will have ~160m parameters)
 
     def forward(self, idx):
         batch_size, seq_len = idx.shape
         assert seq_len <= self.context_length
 
-        pos = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0)
+        pos_emb = torch.arange(seq_len, dtype=torch.long)
         tok_emb = self.te(idx)
-        pos_emb = self.pe(pos)
+        pos_emb = self.pe(pos_emb)
         x = tok_emb + pos_emb
+        x = self.dropout(x)
 
         for block in self.blocks:
             x = block(x)
@@ -86,6 +96,8 @@ class GPT(nn.Module):
         logits = self.lm_head(x)
 
         return logits
+
+
 
 def main(args):
     model = GPT(args.d_model, args.n_heads, args.vocab_size, args.context_length, args.num_blocks)
