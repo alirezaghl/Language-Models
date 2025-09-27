@@ -32,13 +32,11 @@ def generate_text(model, tokenizer, idx, max_new_tokens, device, temperature=0.8
 def generate_samples(model, tokenizer, device, prompt, num_samples=3, max_tokens=100, 
                     temperature=0.8, top_k=None):
     samples = []
-    print(f"\nGenerating {num_samples} samples for prompt: '{prompt}'")
-    print(f"Temperature: {temperature}, Top-k: {top_k}")
+    
     
     encoded = tokenizer.encode(prompt)
     encoded = torch.tensor(encoded, dtype=torch.long, device=device).unsqueeze(0)
     
-    # Generate samples
     for i in range(num_samples):
         output = generate_text(
             model=model,
@@ -52,7 +50,7 @@ def generate_samples(model, tokenizer, device, prompt, num_samples=3, max_tokens
         
         text = tokenizer.decode(output[0].tolist())
         samples.append(text)
-        print(f"\nSample {i+1}:")
+        print(f"\nsample {i+1}:")
         print(text.replace('\n', ' '))
     
     return samples
@@ -83,13 +81,13 @@ def main():
     
     # Test prompts
     test_prompts = [
-        "ROMEO: My love,",
-        "JULIET: O Romeo,",
-        "MERCUTIO: A plague"
+        "ROMEO: my love,",
+        "JULIET: romeo,",
+        "MERCUTIO: plague"
     ]
     
     generation_params = [
-        {'temperature': 0.6, 'top_k': None},  # Greedy
+        {'temperature': 0.6, 'top_k': None},  
         {'temperature': 0.8, 'top_k': 50},     
         {'temperature': 1.0, 'top_k': 100}     
     ]
@@ -97,7 +95,7 @@ def main():
     all_samples = {}
     for prompt in test_prompts:
         print(f"\n{'='*50}")
-        print(f"Generating for prompt: {prompt}")
+        print(f"generating for prompt: {prompt}")
         prompt_samples = []
         
         for params in generation_params:
@@ -115,16 +113,13 @@ def main():
         
         all_samples[prompt] = prompt_samples
     
-    # Save samples to file
     with open('shakespeare_samples_top_k.txt', 'w', encoding='utf-8') as f:
         for prompt, samples in all_samples.items():
             f.write(f"\nPrompt: {prompt}\n")
-            f.write("="*50 + "\n")
             for i, sample in enumerate(samples, 1):
                 f.write(f"\nSample {i}:\n{sample}\n")
                 f.write("-"*30 + "\n")
     
-    print("\nGeneration complete. Results saved to shakespeare_samples_top_k.txt")
 
 if __name__ == "__main__":
     main()
